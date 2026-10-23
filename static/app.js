@@ -1,8 +1,8 @@
 const state = {
   folders: [],
   selectedFolder: null,
-  backends: [],
-  defaultBackend: null,
+  tiers: [],
+  defaultTier: null,
   jobs: {},
   eventSources: {},
 };
@@ -47,14 +47,14 @@ function statusLabel(s) {
 // ---- 配置 ----
 async function loadConfig() {
   const cfg = await api('/api/config');
-  state.backends = cfg.backends;
-  state.defaultBackend = cfg.default_backend;
-  const sel = el('backend');
+  state.tiers = cfg.tiers;
+  state.defaultTier = cfg.default_tier;
+  const sel = el('tier');
   sel.innerHTML = '';
-  for (const b of cfg.backends) {
+  for (const b of cfg.tiers) {
     const o = document.createElement('option');
     o.value = b; o.textContent = b;
-    if (b === cfg.defaultBackend) o.selected = true;
+    if (b === cfg.default_tier) o.selected = true;
     sel.appendChild(o);
   }
 }
@@ -164,11 +164,11 @@ function setupUpload() {
 // ---- 任务 ----
 async function startParse() {
   if (!state.selectedFolder) return;
-  const backend = el('backend').value;
+  const tier = el('tier').value;
   try {
     const res = await api('/api/parse', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ folder: state.selectedFolder, backend }),
+      body: JSON.stringify({ folder: state.selectedFolder, tier }),
     });
     connectJob(res.job_id);
   } catch (e) { alert(e.message); }
@@ -229,7 +229,7 @@ function renderJob(job) {
       <span class="job-name">📄 ${esc(job.name)}</span>
       <span class="badge badge-${job.status}">${statusLabel(job.status)}</span>
     </div>
-    <div class="job-meta">后端 ${esc(job.backend)} · ${job.done_files} / ${job.total_files} 个文件 · ${etaText(job)}</div>
+    <div class="job-meta">质量档 ${esc(job.tier)} · ${job.done_files} / ${job.total_files} 个文件 · ${etaText(job)}</div>
     <div class="bar"><div class="bar-fill" style="width:${pct}%"></div></div>
     <div class="job-pct">${pct}%</div>
     ${job.inputs_cleaned ? `<div class="hint-clean">🧹 原始 PDF 已自动清理，仅保留解析结果</div>` : ''}

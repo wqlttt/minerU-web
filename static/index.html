@@ -28,12 +28,12 @@
     <h2>2️⃣ 选择要解析的文件夹</h2>
     <div id="folderList" class="folder-list">加载中…</div>
     <div class="row">
-      <label>解析后端：
-        <select id="backend"></select>
+      <label>解析质量档：
+        <select id="tier"></select>
       </label>
       <button id="parseBtn" disabled>🚀 开始解析</button>
     </div>
-    <p class="hint">后端说明：pipeline（CPU 可跑，效果一般）· vlm-transformers（8G 显存，效果好）· vlm-sglang（24G 显存，效果最好）</p>
+    <p class="hint">质量档：flash（最快、最低）· basic（低资源）· standard（高质，8G 显存）· advanced（最高质、最慢）</p>
   </section>
 
   <section class="card">

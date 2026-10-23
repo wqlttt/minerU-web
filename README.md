@@ -16,12 +16,16 @@
 
 ## 部署步骤（Linux + NVIDIA GPU）
 
-1. **安装 MinerU**（按你 GPU 环境装好，确保命令行能直接跑 `mineru -h`）：
+1. **安装 MinerU 4.x**（确保 `mineru-kit` 命令可用）：
 
    ```bash
    pip install mineru
-   # 或参考官方文档 https://github.com/opendatalab/MinerU
+   mineru-kit --help            # 确认 mineru-kit 存在
+   # 首次使用可预下载模型（standard 档需 8G+ 显存）：
+   mineru-kit models download --tier standard
    ```
+
+   也可参考官方文档 https://github.com/opendatalab/MinerU
 
 2. **克隆本项目**：
 
@@ -44,7 +48,13 @@
    chmod +x run.sh && ./run.sh
    ```
 
-5. 浏览器打开 `http://<服务器IP>:8000`（记得在云厂商安全组放行 8000 端口）。
+5. 服务默认监听 `127.0.0.1:6006`（不对外暴露）。在本机用 SSH 隧道访问：
+
+   ```bash
+   ssh -CNg -L 6006:127.0.0.1:6006 root@<服务器IP> -p <SSH端口>
+   ```
+
+   然后浏览器打开 `http://localhost:6006`。
 
 ## 配置
 
@@ -52,13 +62,13 @@
 
 | 字段 | 说明 |
 |------|------|
-| `command_template` | 实际执行的 MinerU 命令，占位符 `{input}` `{output}` `{backend}` 自动替换 |
-| `backends` / `default_backend` | 网页下拉框里的后端选项 / 默认后端 |
+| `command_template` | 实际执行的 MinerU 命令，占位符 `{input}` `{output}` `{tier}` 自动替换 |
+| `tiers` / `default_tier` | 网页下拉框里的质量档选项 / 默认质量档（flash/basic/standard/advanced） |
 | `supported_extensions` | 哪些扩展名会被当作可解析文件 |
-| `done_markers` | 判断单文件解析完成的标志文件（一般不用改） |
 | `extra_args` | 追加到 mineru 命令的额外参数，例如 `["-d", "cuda:0"]` |
 | `auto_cleanup_inputs_after_parse` | 解析完成后自动删除原始 PDF 和临时文件（默认 `true`） |
 | `auto_delete_output_after_download` | 下载完成后是否自动删除解析结果（默认 `false`，改为手动点「删除结果」） |
+| `host` / `port` | 监听地址和端口（默认 `127.0.0.1` / `6006`，请勿改成 `0.0.0.0` 暴露公网） |
 
 如果 MinerU 版本较新/命令不同，改 `command_template` 即可，无需改代码。
 
@@ -80,8 +90,6 @@ mineru-web/
 
 ## 安全提示
 
-本项目**没有登录鉴权**，任何能访问该端口的人都能上传文件、执行 MinerU、下载结果。请务必：
+本项目**没有登录鉴权**。默认监听 `127.0.0.1`（仅本机可访问），请通过 **SSH 隧道**访问，不要改成 `0.0.0.0` 暴露到公网。
 
-- 只在受信网络使用，或用防火墙/安全组限制来源 IP；
-- 或用反向代理（Nginx/Caddy）加一层 Basic Auth；
-- 不要把 8000 端口直接暴露到公网。
+如需多人访问，可自行加 Nginx/Caddy 反代 + Basic Auth。

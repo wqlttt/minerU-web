@@ -2,10 +2,11 @@
 
 一个傻瓜式的网页后端：上传 ZIP → 自动解压 → 选中文件夹 → 调用本机 MinerU 解析 → 实时进度条。
 
+针对 MinerU 4.x：使用 `mineru-kit parse`（无状态、默认解析全部页、按文件输出 markdown）。
 部署在云 GPU 服务器上，与 MinerU 装在同一台机器。运行：
     pip install -r requirements.txt
     python app.py
-然后浏览器打开 http://<服务器IP>:8000
+然后通过 SSH 隧道访问 http://localhost:6006
 """
 
 import asyncio
@@ -39,22 +40,20 @@ CONFIG_PATH = BASE_DIR / "config.json"
 JOBS_FILE = DATA_DIR / "jobs.json"
 
 DEFAULT_CONFIG = {
-    # MinerU 调用命令模板，占位符 {input} {output} {backend} 会被自动替换
-    "command_template": "mineru -p {input} -o {output} -b {backend}",
-    "backends": ["pipeline", "vlm-transformers", "vlm-sglang"],
-    "default_backend": "vlm-sglang",
+    # MinerU 4.x：mineru-kit parse 是无状态批量接口，默认解析全部页
+    "command_template": "mineru-kit parse {input} -o {output} --tier {tier}",
+    "tiers": ["flash", "basic", "standard", "advanced"],
+    "default_tier": "standard",
     "supported_extensions": [
         ".pdf", ".doc", ".docx", ".ppt", ".pptx",
         ".xls", ".xlsx", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff",
     ],
-    # 判断某个文件是否解析完成的标志文件（输出子目录里出现任一即视为完成）
-    "done_markers": ["full.md", "_middle.json", "middle.json"],
     "extra_args": [],
     "auto_cleanup_inputs_after_parse": True,
     "auto_delete_output_after_download": False,
     "max_log_lines": 500,
-    "host": "0.0.0.0",
-    "port": 8000,
+    "host": "127.0.0.1",
+    "port": 6006,
 }
 
 
@@ -70,12 +69,11 @@ def load_config():
 
 config = load_config()
 SUPPORTED = {e.lower() for e in config["supported_extensions"]}
-MARKERS = config["done_markers"]
 MAX_LOG = int(config["max_log_lines"])
 
 # ---- 全局状态 ----
-jobs = {}           # job_id -> job dict
-subscribers = {}    # job_id -> set[asyncio.Queue]
+jobs = {}
+subscribers = {}
 main_loop = None
 
 
@@ -84,28 +82,15 @@ def ensure_dirs():
         d.mkdir(parents=True, exist_ok=True)
 
 
-# ---- 工具函数 ----
-
 def supported_files(root: Path):
     return [p for p in sorted(root.rglob("*")) if p.is_file() and p.suffix.lower() in SUPPORTED]
-
-
-def is_done(subdir: Path) -> bool:
-    if not subdir.is_dir():
-        return False
-    for p in subdir.iterdir():
-        if p.is_file():
-            for m in MARKERS:
-                if p.name == m or p.name.endswith(m):
-                    return True
-    return False
 
 
 def snapshot(job):
     return {
         "id": job["id"],
         "name": job["name"],
-        "backend": job["backend"],
+        "tier": job["tier"],
         "status": job["status"],
         "total_files": job["total_files"],
         "done_files": job["done_files"],
@@ -136,19 +121,6 @@ def push_event(job_id, data):
             pass
 
 
-def update_progress(job):
-    total = job["total_files"]
-    if total <= 0:
-        job["done_files"] = 0
-        job["progress_percent"] = 0.0
-        return
-    out = Path(job["output_dir"])
-    done = sum(1 for p in out.iterdir() if is_done(p)) if out.exists() else 0
-    done = min(done, total)
-    job["done_files"] = done
-    job["progress_percent"] = round(done * 100.0 / total, 1)
-
-
 def flatten_input(root: Path, staging: Path):
     """把 root 下所有可解析文件（含嵌套目录）拍平到 staging，用硬链接避免重复占盘。"""
     counts = {}
@@ -166,9 +138,9 @@ def flatten_input(root: Path, staging: Path):
     return staged
 
 
-def build_command(input_dir, output_dir, backend):
+def build_command(input_file, output_md, tier):
     template = config["command_template"]
-    s = template.format(input=str(input_dir), output=str(output_dir), backend=backend)
+    s = template.format(input=str(input_file), output=str(output_md), tier=tier)
     cmd = shlex.split(s)
     extra = config.get("extra_args") or []
     if extra:
@@ -199,7 +171,7 @@ def cleanup_output(job_id):
     zip_path.unlink(missing_ok=True)
     j["status"] = "cleaned"
     j["error"] = None
-    append_log(j, "🗑 结果已下载，输出文件已自动清理")
+    append_log(j, "🗑 结果已删除")
     save_jobs()
     push_event(job_id, snapshot(j))
 
@@ -222,9 +194,10 @@ def load_jobs():
         data = json.loads(JOBS_FILE.read_text(encoding="utf-8"))
         for jid, j in data.items():
             j["process"] = None
+            j["cancel_requested"] = False
             if j.get("status") in ("running", "queued"):
                 j["status"] = "interrupted"
-                j["error"] = "服务重启导致任务中断（已生成的输出文件仍在磁盘上）"
+                j["error"] = "服务重启导致任务中断（已生成的结果文件仍在磁盘上）"
             jobs[jid] = j
     except Exception as e:
         print(f"[warn] 加载任务失败：{e}")
@@ -238,7 +211,7 @@ def run_job(job_id):
         return
     try:
         job["status"] = "running"
-        append_log(job, f"▶ 开始解析：{job['name']}（后端 {job['backend']}）")
+        append_log(job, f"▶ 开始解析：{job['name']}（质量档 {job['tier']}）")
         push_event(job_id, snapshot(job))
 
         staging = STAGING_DIR / job_id
@@ -250,52 +223,66 @@ def run_job(job_id):
             append_log(job, "❌ 没有可解析的文件")
             return
 
-        job["total_files"] = len(files)
-        append_log(job, f"共 {len(files)} 个文件待解析")
-
+        total = len(files)
+        job["total_files"] = total
         out = Path(job["output_dir"])
         out.mkdir(parents=True, exist_ok=True)
-        cmd = build_command(staging, out, job["backend"])
-        append_log(job, "🔧 执行命令：" + " ".join(cmd))
+        append_log(job, "🔧 命令模板：" + config["command_template"])
 
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            cwd=str(BASE_DIR),
-        )
-        job["process"] = proc
+        failed = 0
+        for i, f in enumerate(files):
+            if job.get("cancel_requested"):
+                break
+            job["done_files"] = i
+            job["progress_percent"] = round(i * 100.0 / total, 1)
+            push_event(job_id, snapshot(job))
 
-        def reader():
+            out_md = out / (f.stem + ".md")
+            cmd = build_command(f, out_md, job["tier"])
+            append_log(job, f"[{i + 1}/{total}] {f.name}")
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                cwd=str(BASE_DIR),
+            )
+            job["process"] = proc
+            lines = []
             try:
                 for line in proc.stdout:
-                    append_log(job, line.rstrip("\n"))
+                    lines.append(line.rstrip("\n")[-500:])
+                    if len(lines) > 20:
+                        lines = lines[-20:]
             except Exception:
                 pass
+            proc.wait()
+            job["process"] = None
+            for l in lines[-10:]:
+                append_log(job, l)
+            if job.get("cancel_requested"):
+                append_log(job, "  ⏹ 已终止")
+                break
+            if proc.returncode != 0:
+                failed += 1
+                append_log(job, f"  ❌ 失败 (exit {proc.returncode})")
+            else:
+                append_log(job, "  ✅ 完成")
 
-        threading.Thread(target=reader, daemon=True).start()
-
-        while proc.poll() is None:
-            update_progress(job)
-            push_event(job_id, snapshot(job))
-            time.sleep(1.0)
-
-        update_progress(job)
-        rc = proc.wait()
-        append_log(job, f"--- 进程结束（exit code {rc}） ---")
-        if rc == 0:
-            job["status"] = "done"
-            job["done_files"] = job["total_files"]
+        if job.get("cancel_requested"):
+            job["status"] = "cancelled"
+            append_log(job, "任务已取消")
+        else:
+            job["done_files"] = total - failed
             job["progress_percent"] = 100.0
-            append_log(job, "✅ 解析完成")
+            if failed:
+                job["status"] = "done"
+                append_log(job, f"⚠️ 解析结束：{total - failed}/{total} 成功，{failed} 失败")
+            else:
+                job["status"] = "done"
+                append_log(job, "✅ 全部解析完成")
             cleanup_inputs(job)
             append_log(job, "🧹 原始 PDF 与临时文件已清理，仅保留解析结果")
-        else:
-            job["status"] = "failed"
-            job["error"] = f"mineru 退出码 {rc}"
-            append_log(job, f"❌ 解析失败（退出码 {rc}），请查看上方日志")
     except Exception as e:
         job["status"] = "failed"
         job["error"] = str(e)
@@ -303,7 +290,6 @@ def run_job(job_id):
     finally:
         job["process"] = None
         job["finished_at"] = time.time()
-        update_progress(job)
         save_jobs()
         push_event(job_id, snapshot(job))
 
@@ -327,7 +313,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 class ParseRequest(BaseModel):
     folder: str
-    backend: str
+    tier: str
 
 
 @app.get("/")
@@ -337,7 +323,7 @@ def index():
 
 @app.get("/api/config")
 def get_config():
-    return {"backends": config["backends"], "default_backend": config["default_backend"]}
+    return {"tiers": config["tiers"], "default_tier": config["default_tier"]}
 
 
 @app.post("/api/upload")
@@ -406,8 +392,8 @@ def start_parse(req: ParseRequest):
     folder = EXTRACT_DIR / name
     if not folder.is_dir():
         raise HTTPException(404, "文件夹不存在")
-    if req.backend not in config["backends"]:
-        raise HTTPException(400, f"未知后端：{req.backend}")
+    if req.tier not in config["tiers"]:
+        raise HTTPException(400, f"未知质量档：{req.tier}")
     files = supported_files(folder)
     if not files:
         raise HTTPException(400, "该文件夹里没有可解析的文件")
@@ -418,12 +404,13 @@ def start_parse(req: ParseRequest):
         "name": name,
         "input_dir": str(folder),
         "output_dir": str(OUTPUT_DIR / job_id),
-        "backend": req.backend,
+        "tier": req.tier,
         "status": "queued",
         "total_files": len(files),
         "done_files": 0,
         "progress_percent": 0.0,
         "inputs_cleaned": False,
+        "cancel_requested": False,
         "error": None,
         "log": [],
         "created_at": time.time(),
@@ -481,13 +468,13 @@ def cancel_job(job_id: str):
     j = jobs.get(job_id)
     if not j:
         raise HTTPException(404, "任务不存在")
+    j["cancel_requested"] = True
     proc = j.get("process")
     if proc is not None and proc.poll() is None:
         proc.terminate()
-        append_log(j, "⚠️ 已发送取消信号")
-        j["status"] = "cancelled"
-        save_jobs()
-        push_event(job_id, snapshot(j))
+    append_log(j, "⚠️ 已发送取消信号")
+    save_jobs()
+    push_event(job_id, snapshot(j))
     return snapshot(j)
 
 
@@ -526,4 +513,4 @@ def delete_job_output(job_id: str):
 
 
 if __name__ == "__main__":
-    uvicorn.run("app:app", host=config.get("host", "0.0.0.0"), port=int(config.get("port", 8000)))
+    uvicorn.run("app:app", host=config.get("host", "127.0.0.1"), port=int(config.get("port", 6006)))
