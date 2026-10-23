@@ -1,0 +1,11 @@
+{
+  "command_template": "mineru -p {input} -o {output} -b {backend}",
+  "backends": ["pipeline", "vlm-transformers", "vlm-sglang"],
+  "default_backend": "vlm-sglang",
+  "supported_extensions": [".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"],
+  "done_markers": ["full.md", "_middle.json", "middle.json"],
+  "extra_args": [],
+  "max_log_lines": 500,
+  "host": "0.0.0.0",
+  "port": 8000
+}

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MinerU 解析控制台</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>📄 MinerU 解析控制台</h1>
+    <span class="sub">上传 ZIP → 自动解压 → 选中文件夹 → 一键解析（数据不出本机）</span>
+  </header>
+
+  <section class="card">
+    <h2>1️⃣ 上传 ZIP</h2>
+    <div id="dropzone">
+      <p>把 <code>.zip</code> 拖到这里，或点击选择文件</p>
+      <input type="file" id="fileInput" accept=".zip" hidden>
+    </div>
+    <div id="uploadProgressWrap" class="hidden">
+      <div class="bar"><div id="uploadBar" class="bar-fill"></div></div>
+      <span id="uploadText"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>2️⃣ 选择要解析的文件夹</h2>
+    <div id="folderList" class="folder-list">加载中…</div>
+    <div class="row">
+      <label>解析后端：
+        <select id="backend"></select>
+      </label>
+      <button id="parseBtn" disabled>🚀 开始解析</button>
+    </div>
+    <p class="hint">后端说明：pipeline（CPU 可跑，效果一般）· vlm-transformers（8G 显存，效果好）· vlm-sglang（24G 显存，效果最好）</p>
+  </section>
+
+  <section class="card">
+    <h2>3️⃣ 解析任务与进度</h2>
+    <div id="jobList" class="job-list">暂无任务</div>
+  </section>
+
+  <footer>部署在你的云 GPU 服务器上 · 源码可修改 config.json 调整 MinerU 命令</footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
