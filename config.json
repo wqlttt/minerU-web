@@ -3,6 +3,10 @@
   "tiers": ["flash", "basic", "standard", "advanced"],
   "default_tier": "standard",
   "ocr_mode": "auto",
+  "env": {
+    "MINERU_MODEL_SMALL_BACKEND": "torch",
+    "MINERU_MODEL_VLM_ENGINE": "vllm"
+  },
   "data_dir": "data",
   "supported_extensions": [".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"],
   "extra_args": [],

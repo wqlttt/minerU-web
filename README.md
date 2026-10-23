@@ -16,13 +16,12 @@
 
 ## 部署步骤（Linux + NVIDIA GPU）
 
-1. **安装 MinerU 4.x**（确保 `mineru-kit` 命令可用）：
+1. **安装 MinerU 4.x + GPU 推理引擎 vLLM**（NVIDIA GPU 必须装 `full` 才能用 vLLM）：
 
    ```bash
-   pip install mineru
-   mineru-kit --help            # 确认 mineru-kit 存在
-   # 首次使用可预下载模型（standard 档需 8G+ 显存）：
-   mineru-kit models download --tier standard
+   pip install "mineru[full]"
+   # 下载 vLLM 版模型（standard 档需 8G+ 显存；国内网络会自动回落到 modelscope）
+   mineru-kit models download --tier standard --small-backend torch --vlm-engine vllm
    ```
 
    也可参考官方文档 https://github.com/opendatalab/MinerU

@@ -36,6 +36,11 @@ DEFAULT_CONFIG = {
     "tiers": ["flash", "basic", "standard", "advanced"],
     "default_tier": "standard",
     "ocr_mode": "auto",
+    # 传给 mineru-kit 子进程的环境变量（NVIDIA GPU 走 vLLM）
+    "env": {
+        "MINERU_MODEL_SMALL_BACKEND": "torch",
+        "MINERU_MODEL_VLM_ENGINE": "vllm",
+    },
     # 数据目录（上传/解压/输出都在这里）。根目录小的机器可改成大磁盘路径，例如 "/root/autodl-tmp/mineru-data"
     "data_dir": "data",
     "supported_extensions": [
@@ -250,6 +255,7 @@ def run_job(job_id):
             stderr=subprocess.STDOUT,
             text=True,
             cwd=str(BASE_DIR),
+            env={**os.environ, **(config.get("env") or {})},
         )
         job["process"] = proc
 
