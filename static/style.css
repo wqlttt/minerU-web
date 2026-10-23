@@ -86,6 +86,8 @@ button:disabled { background: #c3cbd6; cursor: not-allowed; }
 .btn-ghost:hover { color: #d33; background: #fff0f0; }
 .btn.cancel { background: #ef4444; }
 .btn.download { background: #16a34a; }
+.btn.ghost-delete { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+.btn.ghost-delete:hover { background: #fee2e2; }
 
 /* jobs */
 .job-list { display: flex; flex-direction: column; gap: 14px; }
@@ -102,8 +104,10 @@ button:disabled { background: #c3cbd6; cursor: not-allowed; }
 .badge-failed { background: #ef4444; }
 .badge-cancelled { background: #f59e0b; }
 .badge-interrupted { background: #f59e0b; }
+.badge-cleaned { background: #6b7280; }
 
 .error { color: #d33; font-size: 13px; margin-top: 6px; }
+.hint-clean { color: #16a34a; font-size: 12px; margin-top: 6px; }
 
 .log-wrap { margin-top: 10px; }
 .log {

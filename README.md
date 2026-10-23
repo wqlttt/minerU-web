@@ -57,6 +57,8 @@
 | `supported_extensions` | 哪些扩展名会被当作可解析文件 |
 | `done_markers` | 判断单文件解析完成的标志文件（一般不用改） |
 | `extra_args` | 追加到 mineru 命令的额外参数，例如 `["-d", "cuda:0"]` |
+| `auto_cleanup_inputs_after_parse` | 解析完成后自动删除原始 PDF 和临时文件（默认 `true`） |
+| `auto_delete_output_after_download` | 下载完成后是否自动删除解析结果（默认 `false`，改为手动点「删除结果」） |
 
 如果 MinerU 版本较新/命令不同，改 `command_template` 即可，无需改代码。
 

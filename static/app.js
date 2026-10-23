@@ -40,7 +40,7 @@ function fmtDuration(s) {
 function statusLabel(s) {
   return ({
     queued: '排队中', running: '解析中', done: '完成',
-    failed: '失败', cancelled: '已取消', interrupted: '已中断',
+    failed: '失败', cancelled: '已取消', interrupted: '已中断', cleaned: '已清理',
   })[s] || s;
 }
 
@@ -182,7 +182,7 @@ function connectJob(jobId) {
     const job = JSON.parse(e.data);
     state.jobs[job.id] = job;
     renderJobs();
-    if (['done', 'failed', 'cancelled', 'interrupted'].includes(job.status)) {
+    if (['cleaned', 'failed', 'cancelled', 'interrupted'].includes(job.status)) {
       es.close();
       delete state.eventSources[jobId];
     }
@@ -193,7 +193,7 @@ async function loadJobs() {
   const data = await api('/api/jobs');
   for (const job of data.jobs) {
     state.jobs[job.id] = job;
-    if (job.status === 'running' || job.status === 'queued') connectJob(job.id);
+    if (['running', 'queued', 'done'].includes(job.status)) connectJob(job.id);
   }
   renderJobs();
 }
@@ -232,14 +232,22 @@ function renderJob(job) {
     <div class="job-meta">后端 ${esc(job.backend)} · ${job.done_files} / ${job.total_files} 个文件 · ${etaText(job)}</div>
     <div class="bar"><div class="bar-fill" style="width:${pct}%"></div></div>
     <div class="job-pct">${pct}%</div>
+    ${job.inputs_cleaned ? `<div class="hint-clean">🧹 原始 PDF 已自动清理，仅保留解析结果</div>` : ''}
     ${job.error ? `<div class="error">❌ ${esc(job.error)}</div>` : ''}
     <div class="log-wrap"><pre class="log">${logHtml}</pre></div>
     <div class="job-actions">
       ${running ? `<button class="btn cancel" data-id="${job.id}">取消</button>` : ''}
-      ${job.status === 'done' ? `<a class="btn download" href="/api/jobs/${job.id}/download">⬇ 下载结果 ZIP</a>` : ''}
+      ${job.status === 'done' ? `
+        <a class="btn download" href="/api/jobs/${job.id}/download">⬇ 下载结果 ZIP</a>
+        <button class="btn ghost-delete" data-id="${job.id}">🗑 删除结果</button>` : ''}
     </div>`;
   const cancelBtn = card.querySelector('.cancel');
   if (cancelBtn) cancelBtn.addEventListener('click', () => api(`/api/jobs/${job.id}/cancel`, { method: 'POST' }));
+  const delBtn = card.querySelector('.ghost-delete');
+  if (delBtn) delBtn.addEventListener('click', async () => {
+    if (!confirm('删除该任务的解析结果？删除后需重新解析才能再次下载。')) return;
+    await api(`/api/jobs/${job.id}/delete`, { method: 'POST' });
+  });
   return card;
 }
 

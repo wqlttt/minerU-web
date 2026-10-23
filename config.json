@@ -5,6 +5,8 @@
   "supported_extensions": [".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"],
   "done_markers": ["full.md", "_middle.json", "middle.json"],
   "extra_args": [],
+  "auto_cleanup_inputs_after_parse": true,
+  "auto_delete_output_after_download": false,
   "max_log_lines": 500,
   "host": "0.0.0.0",
   "port": 8000

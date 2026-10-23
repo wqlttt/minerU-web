@@ -26,6 +26,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
@@ -49,6 +50,8 @@ DEFAULT_CONFIG = {
     # 判断某个文件是否解析完成的标志文件（输出子目录里出现任一即视为完成）
     "done_markers": ["full.md", "_middle.json", "middle.json"],
     "extra_args": [],
+    "auto_cleanup_inputs_after_parse": True,
+    "auto_delete_output_after_download": False,
     "max_log_lines": 500,
     "host": "0.0.0.0",
     "port": 8000,
@@ -107,6 +110,7 @@ def snapshot(job):
         "total_files": job["total_files"],
         "done_files": job["done_files"],
         "progress_percent": job["progress_percent"],
+        "inputs_cleaned": job.get("inputs_cleaned", False),
         "error": job.get("error"),
         "log": job["log"][-30:],
         "created_at": job["created_at"],
@@ -170,6 +174,34 @@ def build_command(input_dir, output_dir, backend):
     if extra:
         cmd = cmd[:1] + [str(x) for x in extra] + cmd[1:]
     return cmd
+
+
+def cleanup_inputs(job):
+    """解析完成后，删除原始 PDF、上传的 zip、拍平临时目录，只保留解析结果。"""
+    if not config.get("auto_cleanup_inputs_after_parse", True):
+        return
+    staging = STAGING_DIR / job["id"]
+    shutil.rmtree(staging, ignore_errors=True)
+    inp = Path(job["input_dir"])
+    if str(inp.resolve()).startswith(str(EXTRACT_DIR.resolve())):
+        shutil.rmtree(inp, ignore_errors=True)
+    job["inputs_cleaned"] = True
+
+
+def cleanup_output(job_id):
+    """删除解析结果目录和打包 zip，并把任务标记为已清理。"""
+    j = jobs.get(job_id)
+    if not j:
+        return
+    out = Path(j["output_dir"])
+    zip_path = out.parent / f"{job_id}_result.zip"
+    shutil.rmtree(out, ignore_errors=True)
+    zip_path.unlink(missing_ok=True)
+    j["status"] = "cleaned"
+    j["error"] = None
+    append_log(j, "🗑 结果已下载，输出文件已自动清理")
+    save_jobs()
+    push_event(job_id, snapshot(j))
 
 
 # ---- 任务持久化 ----
@@ -258,6 +290,8 @@ def run_job(job_id):
             job["done_files"] = job["total_files"]
             job["progress_percent"] = 100.0
             append_log(job, "✅ 解析完成")
+            cleanup_inputs(job)
+            append_log(job, "🧹 原始 PDF 与临时文件已清理，仅保留解析结果")
         else:
             job["status"] = "failed"
             job["error"] = f"mineru 退出码 {rc}"
@@ -337,6 +371,7 @@ async def upload(file: UploadFile = File(...)):
     except zipfile.BadZipFile:
         raise HTTPException(400, "文件不是有效的 ZIP 压缩包")
 
+    zip_path.unlink(missing_ok=True)  # 解压完即删 zip，避免堆积
     count = len(supported_files(folder))
     return {"name": folder.name, "path": str(folder), "files": count}
 
@@ -388,6 +423,7 @@ def start_parse(req: ParseRequest):
         "total_files": len(files),
         "done_files": 0,
         "progress_percent": 0.0,
+        "inputs_cleaned": False,
         "error": None,
         "log": [],
         "created_at": time.time(),
@@ -469,7 +505,24 @@ def download_job(job_id: str):
             for p in sorted(out.rglob("*")):
                 if p.is_file():
                     zf.write(p, p.relative_to(out))
-    return FileResponse(zip_path, filename=f"{j['name']}_result.zip", media_type="application/zip")
+    background = None
+    if config.get("auto_delete_output_after_download", True):
+        background = BackgroundTask(cleanup_output, job_id)
+    return FileResponse(
+        zip_path,
+        filename=f"{j['name']}_result.zip",
+        media_type="application/zip",
+        background=background,
+    )
+
+
+@app.post("/api/jobs/{job_id}/delete")
+def delete_job_output(job_id: str):
+    j = jobs.get(job_id)
+    if not j:
+        raise HTTPException(404, "任务不存在")
+    cleanup_output(job_id)
+    return snapshot(j)
 
 
 if __name__ == "__main__":
