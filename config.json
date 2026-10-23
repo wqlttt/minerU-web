@@ -1,7 +1,9 @@
 {
-  "command_template": "mineru-kit parse {input} -o {output} --tier {tier}",
+  "command_template": "mineru-kit parse {input} -o {output} --tier {tier} --ocr-mode {ocr_mode}",
   "tiers": ["flash", "basic", "standard", "advanced"],
   "default_tier": "standard",
+  "ocr_mode": "auto",
+  "data_dir": "data",
   "supported_extensions": [".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"],
   "extra_args": [],
   "auto_cleanup_inputs_after_parse": true,

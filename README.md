@@ -62,10 +62,12 @@
 
 | 字段 | 说明 |
 |------|------|
-| `command_template` | 实际执行的 MinerU 命令，占位符 `{input}` `{output}` `{tier}` 自动替换 |
+| `command_template` | 实际执行的 MinerU 命令，占位符 `{input}` `{output}` `{tier}` `{ocr_mode}` 自动替换 |
 | `tiers` / `default_tier` | 网页下拉框里的质量档选项 / 默认质量档（flash/basic/standard/advanced） |
+| `ocr_mode` | OCR 模式：`auto`（自动判断，默认）/ `txt`（只提文字）/ `ocr`（强制 OCR） |
+| `data_dir` | 数据目录（上传/解压/输出）。根目录小的机器可改成大磁盘路径，如 `/root/autodl-tmp/mineru-data` |
 | `supported_extensions` | 哪些扩展名会被当作可解析文件 |
-| `extra_args` | 追加到 mineru 命令的额外参数，例如 `["-d", "cuda:0"]` |
+| `extra_args` | 追加到命令末尾的额外参数，例如 `["--disable-image-analysis"]` |
 | `auto_cleanup_inputs_after_parse` | 解析完成后自动删除原始 PDF 和临时文件（默认 `true`） |
 | `auto_delete_output_after_download` | 下载完成后是否自动删除解析结果（默认 `false`，改为手动点「删除结果」） |
 | `host` / `port` | 监听地址和端口（默认 `127.0.0.1` / `6006`，请勿改成 `0.0.0.0` 暴露公网） |

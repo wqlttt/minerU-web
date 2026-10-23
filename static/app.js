@@ -229,7 +229,7 @@ function renderJob(job) {
       <span class="job-name">📄 ${esc(job.name)}</span>
       <span class="badge badge-${job.status}">${statusLabel(job.status)}</span>
     </div>
-    <div class="job-meta">质量档 ${esc(job.tier)} · ${job.done_files} / ${job.total_files} 个文件 · ${etaText(job)}</div>
+    <div class="job-meta">质量档 ${esc(job.tier)} · OCR ${esc(job.ocr_mode || 'auto')} · ${job.done_files} / ${job.total_files} 个文件 · ${etaText(job)}</div>
     <div class="bar"><div class="bar-fill" style="width:${pct}%"></div></div>
     <div class="job-pct">${pct}%</div>
     ${job.inputs_cleaned ? `<div class="hint-clean">🧹 原始 PDF 已自动清理，仅保留解析结果</div>` : ''}

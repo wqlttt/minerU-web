@@ -2,11 +2,8 @@
 
 一个傻瓜式的网页后端：上传 ZIP → 自动解压 → 选中文件夹 → 调用本机 MinerU 解析 → 实时进度条。
 
-针对 MinerU 4.x：使用 `mineru-kit parse`（无状态、默认解析全部页、按文件输出 markdown）。
-部署在云 GPU 服务器上，与 MinerU 装在同一台机器。运行：
-    pip install -r requirements.txt
-    python app.py
-然后通过 SSH 隧道访问 http://localhost:6006
+针对 MinerU 4.x：使用 `mineru-kit parse`，整目录一次跑完（模型只加载一次），
+进度按输出目录里的 markdown 文件数统计。
 """
 
 import asyncio
@@ -30,20 +27,17 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-UPLOAD_DIR = DATA_DIR / "uploads"
-EXTRACT_DIR = DATA_DIR / "extracted"
-STAGING_DIR = DATA_DIR / "staging"
-OUTPUT_DIR = DATA_DIR / "output"
 STATIC_DIR = BASE_DIR / "static"
 CONFIG_PATH = BASE_DIR / "config.json"
-JOBS_FILE = DATA_DIR / "jobs.json"
 
 DEFAULT_CONFIG = {
-    # MinerU 4.x：mineru-kit parse 是无状态批量接口，默认解析全部页
-    "command_template": "mineru-kit parse {input} -o {output} --tier {tier}",
+    # MinerU 4.x 批量接口：整目录一次跑完；{input} {output} {tier} {ocr_mode} 自动替换
+    "command_template": "mineru-kit parse {input} -o {output} --tier {tier} --ocr-mode {ocr_mode}",
     "tiers": ["flash", "basic", "standard", "advanced"],
     "default_tier": "standard",
+    "ocr_mode": "auto",
+    # 数据目录（上传/解压/输出都在这里）。根目录小的机器可改成大磁盘路径，例如 "/root/autodl-tmp/mineru-data"
+    "data_dir": "data",
     "supported_extensions": [
         ".pdf", ".doc", ".docx", ".ppt", ".pptx",
         ".xls", ".xlsx", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff",
@@ -68,6 +62,17 @@ def load_config():
 
 
 config = load_config()
+
+_data_dir = Path(config.get("data_dir", "data")).expanduser()
+if not _data_dir.is_absolute():
+    _data_dir = BASE_DIR / _data_dir
+DATA_DIR = _data_dir.resolve()
+UPLOAD_DIR = DATA_DIR / "uploads"
+EXTRACT_DIR = DATA_DIR / "extracted"
+STAGING_DIR = DATA_DIR / "staging"
+OUTPUT_DIR = DATA_DIR / "output"
+JOBS_FILE = DATA_DIR / "jobs.json"
+
 SUPPORTED = {e.lower() for e in config["supported_extensions"]}
 MAX_LOG = int(config["max_log_lines"])
 
@@ -91,6 +96,7 @@ def snapshot(job):
         "id": job["id"],
         "name": job["name"],
         "tier": job["tier"],
+        "ocr_mode": job.get("ocr_mode", "auto"),
         "status": job["status"],
         "total_files": job["total_files"],
         "done_files": job["done_files"],
@@ -138,13 +144,13 @@ def flatten_input(root: Path, staging: Path):
     return staged
 
 
-def build_command(input_file, output_md, tier):
+def build_command(input_path, output_path, tier, ocr_mode):
     template = config["command_template"]
-    s = template.format(input=str(input_file), output=str(output_md), tier=tier)
+    s = template.format(input=str(input_path), output=str(output_path), tier=tier, ocr_mode=ocr_mode)
     cmd = shlex.split(s)
     extra = config.get("extra_args") or []
     if extra:
-        cmd = cmd[:1] + [str(x) for x in extra] + cmd[1:]
+        cmd = cmd + [str(x) for x in extra]  # 追加到命令末尾，作为 parse 的额外选项
     return cmd
 
 
@@ -197,7 +203,7 @@ def load_jobs():
             j["cancel_requested"] = False
             if j.get("status") in ("running", "queued"):
                 j["status"] = "interrupted"
-                j["error"] = "服务重启导致任务中断（已生成的结果文件仍在磁盘上）"
+                j["error"] = "服务重启导致任务中断（已生成的输出文件仍在磁盘上）"
             jobs[jid] = j
     except Exception as e:
         print(f"[warn] 加载任务失败：{e}")
@@ -205,13 +211,19 @@ def load_jobs():
 
 # ---- 后台解析 ----
 
+def count_markdown(out: Path) -> int:
+    if not out.exists():
+        return 0
+    return sum(1 for p in out.rglob("*.md") if p.is_file())
+
+
 def run_job(job_id):
     job = jobs.get(job_id)
     if job is None:
         return
     try:
         job["status"] = "running"
-        append_log(job, f"▶ 开始解析：{job['name']}（质量档 {job['tier']}）")
+        append_log(job, f"▶ 开始解析：{job['name']}（质量档 {job['tier']}，OCR {job['ocr_mode']}）")
         push_event(job_id, snapshot(job))
 
         staging = STAGING_DIR / job_id
@@ -227,62 +239,58 @@ def run_job(job_id):
         job["total_files"] = total
         out = Path(job["output_dir"])
         out.mkdir(parents=True, exist_ok=True)
-        append_log(job, "🔧 命令模板：" + config["command_template"])
 
-        failed = 0
-        for i, f in enumerate(files):
-            if job.get("cancel_requested"):
-                break
-            job["done_files"] = i
-            job["progress_percent"] = round(i * 100.0 / total, 1)
-            push_event(job_id, snapshot(job))
+        cmd = build_command(staging, out, job["tier"], job["ocr_mode"])
+        append_log(job, "🔧 " + " ".join(cmd))
+        append_log(job, f"共 {total} 个文件，整目录一次解析（模型只加载一次）")
 
-            out_md = out / (f.stem + ".md")
-            cmd = build_command(f, out_md, job["tier"])
-            append_log(job, f"[{i + 1}/{total}] {f.name}")
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                cwd=str(BASE_DIR),
-            )
-            job["process"] = proc
-            lines = []
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            cwd=str(BASE_DIR),
+        )
+        job["process"] = proc
+
+        def reader():
             try:
                 for line in proc.stdout:
-                    lines.append(line.rstrip("\n")[-500:])
-                    if len(lines) > 20:
-                        lines = lines[-20:]
+                    append_log(job, line.rstrip("\n")[-500:])
             except Exception:
                 pass
-            proc.wait()
-            job["process"] = None
-            for l in lines[-10:]:
-                append_log(job, l)
+
+        threading.Thread(target=reader, daemon=True).start()
+
+        while proc.poll() is None:
             if job.get("cancel_requested"):
-                append_log(job, "  ⏹ 已终止")
-                break
-            if proc.returncode != 0:
-                failed += 1
-                append_log(job, f"  ❌ 失败 (exit {proc.returncode})")
-            else:
-                append_log(job, "  ✅ 完成")
+                proc.terminate()
+            md = count_markdown(out)
+            job["done_files"] = min(md, total)
+            job["progress_percent"] = round(job["done_files"] * 100.0 / total, 1)
+            push_event(job_id, snapshot(job))
+            time.sleep(1.0)
+
+        rc = proc.wait()
+        md = count_markdown(out)
+        job["done_files"] = min(md, total)
+        job["progress_percent"] = round(job["done_files"] * 100.0 / total, 1)
+        append_log(job, f"--- 进程结束 (exit {rc})，已生成 {md} 个 markdown ---")
 
         if job.get("cancel_requested"):
             job["status"] = "cancelled"
             append_log(job, "任务已取消")
-        else:
-            job["done_files"] = total - failed
+        elif rc == 0:
+            job["status"] = "done"
+            job["done_files"] = total
             job["progress_percent"] = 100.0
-            if failed:
-                job["status"] = "done"
-                append_log(job, f"⚠️ 解析结束：{total - failed}/{total} 成功，{failed} 失败")
-            else:
-                job["status"] = "done"
-                append_log(job, "✅ 全部解析完成")
+            append_log(job, "✅ 解析完成")
             cleanup_inputs(job)
             append_log(job, "🧹 原始 PDF 与临时文件已清理，仅保留解析结果")
+        else:
+            job["status"] = "failed"
+            job["error"] = f"mineru-kit 退出码 {rc}"
+            append_log(job, f"❌ 解析失败（退出码 {rc}），请查看上方日志")
     except Exception as e:
         job["status"] = "failed"
         job["error"] = str(e)
@@ -323,7 +331,7 @@ def index():
 
 @app.get("/api/config")
 def get_config():
-    return {"tiers": config["tiers"], "default_tier": config["default_tier"]}
+    return {"tiers": config["tiers"], "default_tier": config["default_tier"], "ocr_mode": config.get("ocr_mode", "auto")}
 
 
 @app.post("/api/upload")
@@ -405,6 +413,7 @@ def start_parse(req: ParseRequest):
         "input_dir": str(folder),
         "output_dir": str(OUTPUT_DIR / job_id),
         "tier": req.tier,
+        "ocr_mode": config.get("ocr_mode", "auto"),
         "status": "queued",
         "total_files": len(files),
         "done_files": 0,
