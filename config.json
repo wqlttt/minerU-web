@@ -3,6 +3,8 @@
   "tiers": ["flash", "basic", "standard", "advanced"],
   "default_tier": "standard",
   "ocr_mode": "auto",
+  "parse_mode": "cli",
+  "api_server_url": "http://127.0.0.1:8000",
   "env": {
     "MINERU_MODEL_SMALL_BACKEND": "torch",
     "MINERU_MODEL_VLM_ENGINE": "vllm"

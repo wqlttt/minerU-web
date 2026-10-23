@@ -75,6 +75,20 @@
 
 如果 MinerU 版本较新/命令不同，改 `command_template` 即可，无需改代码。
 
+## 可选：API 常驻模式（省掉每次 3 分钟初始化）
+
+默认 CLI 模式（每次解析启动一次 `mineru-kit parse`，付一次模型初始化）。若想模型常驻、彻底不付初始化成本：
+
+```bash
+bash start-api.sh standard 8000      # 后台启动常驻 api-server（模型加载一次，日志在 api-server.log）
+# 然后把 config.json 改为：
+#   "parse_mode": "api"
+#   "api_server_url": "http://127.0.0.1:8000"
+python app.py                        # 重启网页
+```
+
+启用后，网页会调用 `POST /v1/file_parse` 逐个文件解析，模型不再反复加载。
+
 ## 目录结构
 
 ```

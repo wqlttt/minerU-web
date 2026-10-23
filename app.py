@@ -19,6 +19,7 @@ import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import requests
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
@@ -36,6 +37,8 @@ DEFAULT_CONFIG = {
     "tiers": ["flash", "basic", "standard", "advanced"],
     "default_tier": "standard",
     "ocr_mode": "auto",
+    "parse_mode": "cli",  # "cli" = 每次调 mineru-kit parse；"api" = 调常驻 api-server
+    "api_server_url": "http://127.0.0.1:8000",
     # 传给 mineru-kit 子进程的环境变量（NVIDIA GPU 走 vLLM）
     "env": {
         "MINERU_MODEL_SMALL_BACKEND": "torch",
@@ -239,6 +242,16 @@ def run_job(job_id):
     job = jobs.get(job_id)
     if job is None:
         return
+    if config.get("parse_mode", "cli") == "api":
+        _run_job_api(job_id)
+    else:
+        _run_job_cli(job_id)
+
+
+def _run_job_cli(job_id):
+    job = jobs.get(job_id)
+    if job is None:
+        return
     try:
         job["status"] = "running"
         append_log(job, f"▶ 开始解析：{job['name']}（质量档 {job['tier']}，OCR {job['ocr_mode']}）")
@@ -314,6 +327,107 @@ def run_job(job_id):
             job["status"] = "failed"
             job["error"] = f"mineru-kit 退出码 {rc}"
             append_log(job, f"❌ 解析失败（退出码 {rc}），请查看上方日志")
+    except Exception as e:
+        job["status"] = "failed"
+        job["error"] = str(e)
+        append_log(job, f"❌ 异常：{e}")
+    finally:
+        job["process"] = None
+        job["finished_at"] = time.time()
+        save_jobs()
+        push_event(job_id, snapshot(job))
+
+
+def _api_parse_file(api_url, f, out_dir, tier, ocr_mode):
+    """调用常驻 api-server 解析单个文件，返回 (成功?, 错误信息)。"""
+    params = {"tier": tier, "ocr_mode": ocr_mode, "wait_timeout": 3600, "response_format": "zip"}
+    try:
+        with open(f, "rb") as fh:
+            resp = requests.post(
+                api_url + "/v1/file_parse",
+                params=params,
+                files={"files": (f.name, fh)},
+                timeout=7200,
+            )
+    except Exception as e:
+        return False, f"请求异常：{e}"
+
+    out_sub = out_dir / f.stem
+    out_sub.mkdir(parents=True, exist_ok=True)
+    if resp.status_code == 200:
+        tmp = out_dir / (f.stem + ".tmp")
+        tmp.write_bytes(resp.content)
+        try:
+            with zipfile.ZipFile(tmp) as zf:
+                zf.extractall(out_sub)
+            tmp.unlink(missing_ok=True)
+            return True, ""
+        except zipfile.BadZipFile:
+            # 不是 zip（可能是纯文本/JSON），原样保存
+            tmp.rename(out_sub / (f.stem + ".out"))
+            return True, ""
+    return False, f"HTTP {resp.status_code}: {resp.text[:300]}"
+
+
+def _run_job_api(job_id):
+    job = jobs.get(job_id)
+    if job is None:
+        return
+    try:
+        job["status"] = "running"
+        append_log(job, f"▶ 开始解析（API 常驻模式）：{job['name']}（质量档 {job['tier']}）")
+        push_event(job_id, snapshot(job))
+
+        staging = STAGING_DIR / job_id
+        staging.mkdir(parents=True, exist_ok=True)
+        files = flatten_input(Path(job["input_dir"]), staging)
+        if not files:
+            job["status"] = "failed"
+            job["error"] = "文件夹里没有可解析的文件"
+            append_log(job, "❌ 没有可解析的文件")
+            return
+
+        total = len(files)
+        job["total_files"] = total
+        out = Path(job["output_dir"])
+        out.mkdir(parents=True, exist_ok=True)
+
+        api_url = config.get("api_server_url", "http://127.0.0.1:8000").rstrip("/")
+        tier = job["tier"]
+        ocr = job["ocr_mode"]
+
+        failed = 0
+        for i, f in enumerate(files):
+            if job.get("cancel_requested"):
+                break
+            job["done_files"] = i
+            job["progress_percent"] = round(i * 100.0 / total, 1)
+            if job["done_files"] > 0 and not job.get("first_done_at"):
+                job["first_done_at"] = time.time()
+            push_event(job_id, snapshot(job))
+
+            append_log(job, f"[{i + 1}/{total}] {f.name}")
+            ok, msg = _api_parse_file(api_url, f, out, tier, ocr)
+            if ok:
+                append_log(job, "  ✅ 完成")
+            else:
+                failed += 1
+                append_log(job, f"  ❌ 失败：{msg}")
+
+        if job.get("cancel_requested"):
+            job["status"] = "cancelled"
+            append_log(job, "任务已取消")
+        else:
+            job["done_files"] = total - failed
+            job["progress_percent"] = 100.0
+            if failed:
+                job["status"] = "done"
+                append_log(job, f"⚠️ 解析结束：{total - failed}/{total} 成功，{failed} 失败")
+            else:
+                job["status"] = "done"
+                append_log(job, "✅ 全部解析完成")
+            cleanup_inputs(job)
+            append_log(job, "🧹 原始 PDF 与临时文件已清理，仅保留解析结果")
     except Exception as e:
         job["status"] = "failed"
         job["error"] = str(e)

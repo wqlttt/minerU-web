@@ -40,6 +40,11 @@ mineru-kit models verify --tier standard --small-backend torch --vlm-engine vllm
     || echo "  （校验未通过也无妨，可先试跑一个 PDF 看效果）"
 
 echo ""
+echo "[提示] 磁盘空间："
+df -h / 2>/dev/null | tail -2
+echo "  若根目录空间小（<50G），建议把 config.json 的 data_dir 改成大磁盘路径，例如 /root/autodl-tmp/mineru-data"
+
+echo ""
 echo "=============================================="
 echo "  ✅ 环境准备完成"
 echo "=============================================="
