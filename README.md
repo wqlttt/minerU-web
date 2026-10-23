@@ -16,6 +16,8 @@
 
 ## 部署步骤（Linux + NVIDIA GPU）
 
+> **一键方式**：克隆仓库后直接 `bash setup.sh`，会自动完成下面 1～4 步（装 vLLM、装网页依赖、下模型、校验）。
+
 1. **安装 MinerU 4.x + GPU 推理引擎 vLLM**（NVIDIA GPU 必须装 `full` 才能用 vLLM）：
 
    ```bash
