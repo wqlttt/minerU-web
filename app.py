@@ -97,18 +97,30 @@ def supported_files(root: Path):
 
 
 def snapshot(job):
+    total = job["total_files"]
+    done = job["done_files"]
+    per_file_sec = None
+    eta_sec = None
+    first_done_at = job.get("first_done_at")
+    if done > 0 and first_done_at:
+        effective = max(time.time() - first_done_at, 0.5)
+        per_file_sec = effective / done
+        if total > done:
+            eta_sec = per_file_sec * (total - done)
     return {
         "id": job["id"],
         "name": job["name"],
         "tier": job["tier"],
         "ocr_mode": job.get("ocr_mode", "auto"),
         "status": job["status"],
-        "total_files": job["total_files"],
-        "done_files": job["done_files"],
+        "total_files": total,
+        "done_files": done,
         "progress_percent": job["progress_percent"],
+        "per_file_sec": per_file_sec,
+        "eta_sec": eta_sec,
         "inputs_cleaned": job.get("inputs_cleaned", False),
         "error": job.get("error"),
-        "log": job["log"][-30:],
+        "log": job["log"][-40:],
         "created_at": job["created_at"],
         "finished_at": job.get("finished_at"),
     }
@@ -206,6 +218,7 @@ def load_jobs():
         for jid, j in data.items():
             j["process"] = None
             j["cancel_requested"] = False
+            j.setdefault("first_done_at", None)
             if j.get("status") in ("running", "queued"):
                 j["status"] = "interrupted"
                 j["error"] = "服务重启导致任务中断（已生成的输出文件仍在磁盘上）"
@@ -274,6 +287,8 @@ def run_job(job_id):
             md = count_markdown(out)
             job["done_files"] = min(md, total)
             job["progress_percent"] = round(job["done_files"] * 100.0 / total, 1)
+            if job["done_files"] > 0 and not job.get("first_done_at"):
+                job["first_done_at"] = time.time()
             push_event(job_id, snapshot(job))
             time.sleep(1.0)
 
@@ -281,6 +296,8 @@ def run_job(job_id):
         md = count_markdown(out)
         job["done_files"] = min(md, total)
         job["progress_percent"] = round(job["done_files"] * 100.0 / total, 1)
+        if job["done_files"] > 0 and not job.get("first_done_at"):
+            job["first_done_at"] = time.time()
         append_log(job, f"--- 进程结束 (exit {rc})，已生成 {md} 个 markdown ---")
 
         if job.get("cancel_requested"):
@@ -426,6 +443,7 @@ def start_parse(req: ParseRequest):
         "progress_percent": 0.0,
         "inputs_cleaned": False,
         "cancel_requested": False,
+        "first_done_at": None,
         "error": None,
         "log": [],
         "created_at": time.time(),

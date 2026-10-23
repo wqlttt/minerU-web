@@ -5,6 +5,7 @@ const state = {
   defaultTier: null,
   jobs: {},
   eventSources: {},
+  openLogs: new Set(),
 };
 
 function el(id) { return document.getElementById(id); }
@@ -198,18 +199,6 @@ async function loadJobs() {
   renderJobs();
 }
 
-function etaText(job) {
-  if (job.status === 'done') return '已完成';
-  if (job.status === 'failed') return '失败';
-  if (job.status === 'cancelled') return '已取消';
-  if (job.status === 'interrupted') return '已中断';
-  if (!job.done_files || job.done_files <= 0) return '准备中…';
-  const elapsed = (Date.now() / 1000) - job.created_at;
-  const rate = job.done_files / elapsed;
-  if (rate <= 0) return '计算中…';
-  return '预计剩余 ' + fmtDuration((job.total_files - job.done_files) / rate);
-}
-
 function renderJobs() {
   const list = el('jobList');
   const jobs = Object.values(state.jobs).sort((a, b) => b.created_at - a.created_at);
@@ -223,24 +212,35 @@ function renderJob(job) {
   card.className = 'job ' + job.status;
   const pct = job.progress_percent ?? 0;
   const running = job.status === 'running' || job.status === 'queued';
-  const logHtml = (job.log || []).slice(-15).map(l => `<div class="log-line">${esc(l)}</div>`).join('');
+  const logHtml = (job.log || []).slice(-40).map(l => `<div class="log-line">${esc(l)}</div>`).join('');
+  const logOpen = state.openLogs.has(job.id);
+  const perFile = job.per_file_sec ? fmtDuration(job.per_file_sec) : null;
+  const eta = job.eta_sec ? fmtDuration(job.eta_sec) : null;
+
   card.innerHTML = `
     <div class="job-head">
       <span class="job-name">📄 ${esc(job.name)}</span>
       <span class="badge badge-${job.status}">${statusLabel(job.status)}</span>
     </div>
-    <div class="job-meta">质量档 ${esc(job.tier)} · OCR ${esc(job.ocr_mode || 'auto')} · ${job.done_files} / ${job.total_files} 个文件 · ${etaText(job)}</div>
     <div class="bar"><div class="bar-fill" style="width:${pct}%"></div></div>
-    <div class="job-pct">${pct}%</div>
+    <div class="job-stats">
+      <span class="stat-big">${pct}%</span>
+      <span class="stat-line">已处理 <b>${job.done_files}</b> / ${job.total_files} 个文件</span>
+      ${running && !perFile ? '<span class="stat-line">⏱ 正在初始化模型（约 3 分钟）…</span>' : ''}
+      ${perFile ? `<span class="stat-line">⏱ 平均每文件 ~${perFile}</span>` : ''}
+      ${running && eta ? `<span class="stat-line">🕐 预计还需 ~${eta}</span>` : ''}
+    </div>
     ${job.inputs_cleaned ? `<div class="hint-clean">🧹 原始 PDF 已自动清理，仅保留解析结果</div>` : ''}
     ${job.error ? `<div class="error">❌ ${esc(job.error)}</div>` : ''}
-    <div class="log-wrap"><pre class="log">${logHtml}</pre></div>
     <div class="job-actions">
       ${running ? `<button class="btn cancel" data-id="${job.id}">取消</button>` : ''}
+      <button class="btn-ghost log-toggle" data-id="${job.id}">${logOpen ? '📋 收起日志' : '📋 查看日志'}</button>
       ${job.status === 'done' ? `
         <a class="btn download" href="/api/jobs/${job.id}/download">⬇ 下载结果 ZIP</a>
         <button class="btn ghost-delete" data-id="${job.id}">🗑 删除结果</button>` : ''}
-    </div>`;
+    </div>
+    <div class="log-wrap ${logOpen ? '' : 'hidden'}"><pre class="log">${logHtml}</pre></div>
+  `;
   const cancelBtn = card.querySelector('.cancel');
   if (cancelBtn) cancelBtn.addEventListener('click', () => api(`/api/jobs/${job.id}/cancel`, { method: 'POST' }));
   const delBtn = card.querySelector('.ghost-delete');
@@ -248,6 +248,16 @@ function renderJob(job) {
     if (!confirm('删除该任务的解析结果？删除后需重新解析才能再次下载。')) return;
     await api(`/api/jobs/${job.id}/delete`, { method: 'POST' });
   });
+  const logToggle = card.querySelector('.log-toggle');
+  if (logToggle) logToggle.addEventListener('click', () => {
+    if (state.openLogs.has(job.id)) state.openLogs.delete(job.id);
+    else state.openLogs.add(job.id);
+    renderJobs();
+  });
+  if (logOpen) {
+    const pre = card.querySelector('.log');
+    if (pre) pre.scrollTop = pre.scrollHeight;
+  }
   return card;
 }
 
